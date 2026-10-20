@@ -19,24 +19,39 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 
+import { authGate } from "./auth.ts";
 import { chunkText, countWords } from "./chunker.ts";
+import { enrichActions } from "./enrich.ts";
+import { saveDigestHistory } from "./history.ts";
 import { extractActions, MODEL_ID, summarizeChunk, summarizeFile } from "./model.ts";
+import { tabpfnSection } from "./priority.ts";
 import { hashContent, loadState, saveState, type FileState } from "./state.ts";
+import { indexDigestInTiger } from "./tiger.ts";
+import { flushTracing, initTracing, traceDigestRun } from "./tracing.ts";
+import { synthesizeWithUltramarine } from "./ultramarine.ts";
+import { fetchUrlText } from "./urlfetch.ts";
+import { narrateDigest } from "./voice.ts";
 
 const ROOT = process.cwd();
 const INBOX = path.join(ROOT, "inbox");
 const SAMPLES = path.join(ROOT, "samples");
 const OUT_DIR = path.join(ROOT, "out");
 const DIGEST_MD = path.join(OUT_DIR, "digest.md");
+const SAMPLE_DIGEST = path.join(SAMPLES, "digest-sample.md");
 const PACING_MS = Number(process.env.PACING_MS ?? 150);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let freshModelCalls = 0;
 let resumedChunks = 0;
+let cloudSynth = false;
 
-async function processFile(name: string, state: ReturnType<typeof loadState>): Promise<FileState> {
-  const content = fs.readFileSync(path.join(INBOX, name), "utf8");
+async function processFile(
+  name: string,
+  state: ReturnType<typeof loadState>,
+  contentOverride?: string,
+): Promise<FileState> {
+  const content = contentOverride ?? fs.readFileSync(path.join(INBOX, name), "utf8");
   const hash = hashContent(content);
 
   let file = state.files[name];
@@ -69,8 +84,17 @@ async function processFile(name: string, state: ReturnType<typeof loadState>): P
 
   if (!file.done) {
     const summaries = file.chunks.map((c) => c.summary ?? "");
-    file.finalSummary = await summarizeFile(name, summaries);
-    freshModelCalls++;
+    // Optional Ultramarine cloud synthesis (--cloud-synth + API key):
+    // only the chunk *summaries* are sent, never the raw notes.
+    const cloud =
+      cloudSynth && summaries.length > 1
+        ? await synthesizeWithUltramarine(name, summaries).catch((err) => {
+            console.log(`   ☁️ Ultramarine failed (${err instanceof Error ? err.message : String(err)}); using the local model.`);
+            return null;
+          })
+        : null;
+    file.finalSummary = cloud ? cloud.text : await summarizeFile(name, summaries);
+    if (!cloud) freshModelCalls++;
     file.actions = await extractActions(summaries);
     freshModelCalls++;
     file.done = true;
@@ -142,20 +166,63 @@ function seedDemoInbox(): void {
   }
 }
 
+/**
+ * Which digest should the viewer show? The freshly generated one when it
+ * exists; otherwise the bundled sample digest, so a fresh hosted deploy
+ * (Render / DigitalOcean) shows a real digest before anyone runs the CLI.
+ */
+function currentDigestPath(): string | null {
+  if (fs.existsSync(DIGEST_MD)) return DIGEST_MD;
+  if (fs.existsSync(SAMPLE_DIGEST)) return SAMPLE_DIGEST;
+  return null;
+}
+
+function startViewer(): void {
+  const port = Number(process.env.PORT ?? 4173);
+  http
+    .createServer(async (req, res) => {
+      // Optional Auth0 gate (no-op unless AUTH0_* env vars are set).
+      if (!(await authGate(req, res))) return;
+      const file = currentDigestPath();
+      if (!file) {
+        res.writeHead(503, { "content-type": "text/plain; charset=utf-8" });
+        res.end("No digest yet. Run `npm run demo` first.");
+        return;
+      }
+      const md = fs.readFileSync(file, "utf8");
+      if (req.url === "/digest.md") {
+        res.writeHead(200, { "content-type": "text/markdown; charset=utf-8" });
+        res.end(md);
+      } else {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        res.end(mdToHtml(md));
+      }
+    })
+    .listen(port, () => console.log(`\n🌿 Read it in your browser: http://localhost:${port}`));
+}
+
 async function main(): Promise<void> {
+  initTracing();
   const args = new Set(process.argv.slice(2));
   if (args.has("--demo")) seedDemoInbox();
+  cloudSynth = args.has("--cloud-synth");
 
   fs.mkdirSync(INBOX, { recursive: true });
   fs.mkdirSync(OUT_DIR, { recursive: true });
 
   const names = fs
     .readdirSync(INBOX)
-    .filter((f) => /\.(txt|md)$/i.test(f))
+    .filter((f) => /\.(txt|md|url)$/i.test(f))
     .sort();
 
   if (!names.length) {
-    console.log("🦥 Inbox is empty. Drop .txt or .md files into ./inbox and run again,");
+    if (args.has("--serve")) {
+      console.log("🦥 Inbox is empty — serving the bundled sample digest.");
+      startViewer();
+      return;
+    }
+    console.log("🦥 Inbox is empty. Drop .txt, .md or .url files into ./inbox and run again,");
+    console.log("   (a .url file contains one web address; its page text gets digested)");
     console.log("   or try the demo:  npm run demo");
     return;
   }
@@ -167,15 +234,67 @@ async function main(): Promise<void> {
 
   const files: FileState[] = [];
   let sourceWords = 0;
-  for (const name of names) {
-    console.log(`📄 ${name}`);
-    sourceWords += countWords(fs.readFileSync(path.join(INBOX, name), "utf8"));
-    files.push(await processFile(name, state));
+  await traceDigestRun(async () => {
+    for (const name of names) {
+      console.log(`📄 ${name}`);
+      if (/\.url$/i.test(name)) {
+        // Browserbase/Stagehand input path: fetch the page text and
+        // digest it like any other file. Fetched text is cached in the
+        // checkpoint state under the .url file's name.
+        const url = fs.readFileSync(path.join(INBOX, name), "utf8").trim().split("\n")[0].trim();
+        const text = await fetchUrlText(url);
+        if (!text) {
+          console.log(`   ⚠️ Could not fetch ${url}; skipping.`);
+          continue;
+        }
+        sourceWords += countWords(text);
+        files.push(await processFile(name, state, text));
+      } else {
+        sourceWords += countWords(fs.readFileSync(path.join(INBOX, name), "utf8"));
+        files.push(await processFile(name, state));
+      }
+    }
+  });
+
+  if (!files.length) {
+    console.log("🦥 Nothing could be processed this run.");
+    return;
   }
 
-  const digest = renderDigest(files, new Date());
+  let digest = renderDigest(files, new Date());
+
+  // Optional SerpApi enrichment (--enrich + API key).
+  if (args.has("--enrich")) {
+    const allActions = files.flatMap((f) => f.actions ?? []);
+    const section = await enrichActions(allActions).catch(() => null);
+    if (section) digest += "\n" + section + "\n";
+  }
+
+  // Optional TabPFN action-item priorities (--priority + Prior Labs access).
+  if (args.has("--priority")) {
+    // priorities are computed from out/digest.json, written below on the
+    // first pass; write it now so the scorer has fresh data.
+    fs.writeFileSync(path.join(OUT_DIR, "digest.json"), JSON.stringify(files, null, 2));
+    const section = await tabpfnSection().catch(() => null);
+    if (section) digest += "\n" + section + "\n";
+  }
+
   fs.writeFileSync(DIGEST_MD, digest);
   fs.writeFileSync(path.join(OUT_DIR, "digest.json"), JSON.stringify(files, null, 2));
+
+  // Optional MongoDB Atlas history (MONGODB_URI).
+  await saveDigestHistory(files, digest);
+
+  // Optional Tiger Data pgvector index (TIGER_DATABASE_URL).
+  await indexDigestInTiger(files);
+
+  // Optional ElevenLabs narration (--voice + API key).
+  if (args.has("--voice")) {
+    await narrateDigest(files).catch((err) => {
+      console.log(`🔇 Narration failed (${err instanceof Error ? err.message : String(err)}); digest itself is unaffected.`);
+      return null;
+    });
+  }
 
   const digestWords = countWords(digest);
   const readingSaved = Math.max(0, Math.round(sourceWords / 200 - digestWords / 200));
@@ -184,20 +303,9 @@ async function main(): Promise<void> {
   console.log(`   Model calls this run: ${freshModelCalls} fresh, ${resumedChunks} chunks resumed from checkpoints`);
   console.log(`   Source: ~${sourceWords} words → digest: ~${digestWords} words. Roughly ${readingSaved} minute(s) of reading, done by a sloth. (${seconds}s wall time)`);
 
-  if (args.has("--serve")) {
-    const port = Number(process.env.PORT ?? 4173);
-    http
-      .createServer((req, res) => {
-        if (req.url === "/digest.md") {
-          res.writeHead(200, { "content-type": "text/markdown; charset=utf-8" });
-          res.end(fs.readFileSync(DIGEST_MD, "utf8"));
-        } else {
-          res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-          res.end(mdToHtml(fs.readFileSync(DIGEST_MD, "utf8")));
-        }
-      })
-      .listen(port, () => console.log(`\n🌿 Read it in your browser: http://localhost:${port}`));
-  }
+  await flushTracing();
+
+  if (args.has("--serve")) startViewer();
 }
 
 main().catch((err) => {
