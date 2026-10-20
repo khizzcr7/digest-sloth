@@ -1,0 +1,17 @@
+#team-chat — exported 2026-10-19
+
+Sara: morning all. Quick update on the onboarding flow. The new signup page is live on staging and the drop-off at step two went from 41 percent to 23 percent in the first day of testing.
+Bilal: that is a huge improvement. Did the shorter form make the difference?
+Sara: mostly that, plus the progress bar. People seem to finish when they can see how much is left. We still have a problem though. About 8 percent of users never verify their email, and support tickets about stuck accounts doubled this week.
+Omar: I can look at the verification emails. I suspect the link expires too fast. It is set to 15 minutes right now, which is short if the email lands in spam.
+Priya: let us raise it to 24 hours and add a resend button on the login page. That should fix most of the tickets. Omar, can you ship that by Thursday?
+Omar: yes, Thursday works. I will also log how many resends happen so we know if it helped.
+Bilal: on the billing side, the invoice PDF bug is fixed. Customers were downloading blank invoices when their plan name contained an ampersand. It was an escaping bug in the template. The fix is merged and will go out in the Friday release.
+Sara: speaking of the Friday release, are we still on track?
+Priya: mostly. The reporting dashboard is the risky part. The charts render fine with small accounts but a workspace with ten thousand rows takes almost 30 seconds to load. We need pagination before this ships to everyone.
+Bilal: I can add server-side pagination on Wednesday. It is a small change, the API already accepts page parameters.
+Priya: perfect. Then Friday is realistic. Let us also decide the pricing experiment. Marketing wants to test a 14 day free trial instead of 7 days on the landing page.
+Omar: I am in favor. Our activation numbers suggest people need the second weekend to actually try the product properly.
+Sara: agreed, let us run it for two weeks and compare. I will write up the experiment plan and share it in the docs folder tomorrow.
+Priya: last thing. The customer success team asked for an export button on the reports page. It keeps coming up in calls. Let us put it on the roadmap for November and tell them honestly instead of promising a date.
+Bilal: agreed. I will reply to their thread today so they hear it from engineering first.
