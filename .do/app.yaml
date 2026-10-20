@@ -1,0 +1,22 @@
+# DigitalOcean App Platform spec for the Digest Sloth web viewer.
+# Mirrors render.yaml: same build/start commands, same PORT-based server.
+# Deploy with: doctl apps create --spec .do/app.yaml
+# The viewer serves out/digest.md when present and falls back to the
+# bundled samples/digest-sample.md on a fresh deploy.
+name: digest-sloth
+region: nyc
+services:
+  - name: viewer
+    github:
+      repo: khizzcr7/digest-sloth
+      branch: main
+      deploy_on_push: true
+    build_command: npm install
+    run_command: npm run serve
+    environment_slug: node-js
+    instance_count: 1
+    instance_size_slug: basic-xs
+    http_port: 4173
+    envs:
+      - key: NODE_VERSION
+        value: "22"
