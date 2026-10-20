@@ -1,1 +1,45 @@
-{"dependencies":{"@huggingface/transformers":"^3.0.0"},"description":"Drop files in, wake up to a digest. A slow-and-steady overnight digest agent powered by a local open-weight model.","engines":{"node":">=22"},"license":"MIT","name":"digest-sloth","private":true,"scripts":{"demo":"node src/main.ts --demo","serve":"node src/main.ts --serve","start":"node src/main.ts"},"type":"module","version":"0.1.0"}
+{
+  "dependencies": {
+    "@browserbasehq/stagehand": "^4.3.0",
+    "@huggingface/transformers": "^3.0.0",
+    "@mastra/core": "^1.78.0",
+    "@sentry/node": "^11.8.0",
+    "@temporalio/activity": "^1.24.0",
+    "@temporalio/client": "^1.24.0",
+    "@temporalio/worker": "^1.24.0",
+    "@temporalio/workflow": "^1.24.0",
+    "@types/pg": "^8.23.1",
+    "mongodb": "^7.7.0",
+    "openai": "^7.39.0",
+    "openid-client": "^6.8.8",
+    "pg": "^8.23.1",
+    "zod": "^4.6.7"
+  },
+  "description": "Drop files in, wake up to a digest. A slow-and-steady overnight digest agent powered by a local open-weight model.",
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "name": "digest-sloth",
+  "private": true,
+  "scripts": {
+    "demo": "node src/main.ts --demo",
+    "serve": "node src/main.ts --serve",
+    "start": "node src/main.ts",
+    "history": "node src/history-list.ts",
+    "compare": "node src/compare.ts",
+    "ask": "node src/ask.ts",
+    "digest:mastra": "node src/mastra/run-mastra.ts",
+    "temporal:worker": "node src/temporal/worker.ts",
+    "temporal:run": "node src/temporal/client.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "type": "module",
+  "version": "0.1.0",
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  },
+  "overrides": {
+    "onnxruntime-node": "1.30.0"
+  }
+}

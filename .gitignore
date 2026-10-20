@@ -5,3 +5,6 @@ out/
 inbox/*
 !inbox/.gitkeep
 *.log
+.venv-tabpfn/
+data/
+.env

@@ -1,0 +1,14 @@
+# Render deploy for the Digest Sloth web viewer.
+# The viewer serves out/digest.md when a digest has been generated, and
+# falls back to the bundled samples/digest-sample.md on a fresh deploy,
+# so the live demo always shows a real digest.
+services:
+  - type: web
+    name: digest-sloth
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm run serve
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
